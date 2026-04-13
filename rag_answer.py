@@ -23,7 +23,12 @@ Definition of Done Sprint 3:
 
 import os
 from typing import List, Dict, Any, Optional, Tuple
+
+import chromadb
 from dotenv import load_dotenv
+from rank_bm25 import BM25Okapi
+
+from index import CHROMA_DB_DIR, get_embedding
 
 load_dotenv()
 
@@ -53,33 +58,44 @@ def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any]
         List các dict, mỗi dict là một chunk với:
           - "text": nội dung chunk
           - "metadata": metadata (source, section, effective_date, ...)
-          - "score": cosine similarity score
-
-    TODO Sprint 2:
-    1. Embed query bằng cùng model đã dùng khi index (xem index.py)
-    2. Query ChromaDB với embedding đó
-    3. Trả về kết quả kèm score
-
-    Gợi ý:
-        import chromadb
-        from index import get_embedding, CHROMA_DB_DIR
-
-        client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
-        collection = client.get_collection("rag_lab")
-
-        query_embedding = get_embedding(query)
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"]
-        )
-        # Lưu ý: distances trong ChromaDB cosine = 1 - similarity
-        # Score = 1 - distance
+          - "score": cosine similarity (1 - distance khi space=cosine trong Chroma)
     """
-    raise NotImplementedError(
-        "TODO Sprint 2: Implement retrieve_dense().\n"
-        "Tham khảo comment trong hàm để biết cách query ChromaDB."
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    collection = client.get_collection("rag_lab")
+    query_embedding = get_embedding(query)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"],
     )
+
+    documents = results.get("documents") or []
+    metadatas = results.get("metadatas") or []
+    distances = results.get("distances") or []
+
+    if not documents or not documents[0]:
+        return []
+
+    docs_row = documents[0]
+    metas_row = metadatas[0] if metadatas else []
+    dists_row = distances[0] if distances else []
+
+    chunks: List[Dict[str, Any]] = []
+    for i, text in enumerate(docs_row):
+        if text is None:
+            continue
+        meta = metas_row[i] if i < len(metas_row) and metas_row[i] is not None else {}
+        dist = dists_row[i] if i < len(dists_row) else None
+        # Với metric cosine: distance ≈ 1 - cosine_similarity → score = 1 - distance
+        score = (1.0 - float(dist)) if dist is not None else 0.0
+        chunks.append(
+            {
+                "text": text,
+                "metadata": meta,
+                "score": score,
+            }
+        )
+    return chunks
 
 
 # =============================================================================
@@ -94,25 +110,54 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
     Mạnh ở: exact term, mã lỗi, tên riêng (ví dụ: "ERR-403", "P1", "refund")
     Hay hụt: câu hỏi paraphrase, đồng nghĩa
 
-    TODO Sprint 3 (nếu chọn hybrid):
-    1. Cài rank_bm25: pip install rank-bm25
-    2. Load tất cả chunks từ ChromaDB (hoặc rebuild từ docs)
-    3. Tokenize và tạo BM25Index
-    4. Query và trả về top_k kết quả
-
-    Gợi ý:
-        from rank_bm25 import BM25Okapi
-        corpus = [chunk["text"] for chunk in all_chunks]
-        tokenized_corpus = [doc.lower().split() for doc in corpus]
-        bm25 = BM25Okapi(tokenized_corpus)
-        tokenized_query = query.lower().split()
-        scores = bm25.get_scores(tokenized_query)
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    Returns:
+        Giống retrieve_dense: mỗi phần tử có "text", "metadata", "score" (điểm BM25 thô).
     """
-    # TODO Sprint 3: Implement BM25 search
-    # Tạm thời return empty list
-    print("[retrieve_sparse] Chưa implement — Sprint 3")
-    return []
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    collection = client.get_collection("rag_lab")
+    raw = collection.get(include=["documents", "metadatas"])
+
+    documents = raw.get("documents") or []
+    metadatas = raw.get("metadatas") or []
+
+    corpus_texts: List[str] = []
+    corpus_metas: List[Dict[str, Any]] = []
+    for i, text in enumerate(documents):
+        if text is None:
+            continue
+        meta = metadatas[i] if i < len(metadatas) and metadatas[i] is not None else {}
+        corpus_texts.append(text)
+        corpus_metas.append(meta)
+
+    if not corpus_texts:
+        return []
+
+    tokenized_corpus: List[List[str]] = []
+    for doc in corpus_texts:
+        tokens = doc.lower().split()
+        if not tokens:
+            tokens = ["_"]
+        tokenized_corpus.append(tokens)
+
+    bm25 = BM25Okapi(tokenized_corpus)
+    tokenized_query = query.lower().split()
+    if not tokenized_query:
+        return []
+
+    scores = bm25.get_scores(tokenized_query)
+    n = len(scores)
+    top_indices = sorted(range(n), key=lambda i: scores[i], reverse=True)[:top_k]
+
+    chunks: List[Dict[str, Any]] = []
+    for idx in top_indices:
+        chunks.append(
+            {
+                "text": corpus_texts[idx],
+                "metadata": corpus_metas[idx],
+                "score": float(scores[idx]),
+            }
+        )
+    return chunks
 
 
 # =============================================================================
