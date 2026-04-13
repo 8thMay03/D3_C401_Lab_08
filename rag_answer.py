@@ -656,6 +656,13 @@ if __name__ == "__main__":
         "SLA xử lý ticket P1 là bao lâu?",
         "Khách hàng có thể yêu cầu hoàn tiền trong bao nhiêu ngày?",
         "Ai phải phê duyệt để cấp quyền Level 3?",
+        "Sản phẩm kỹ thuật số có được hoàn tiền không?",
+        "Tài khoản bị khóa sau bao nhiêu lần đăng nhập sai?",
+        "Escalation trong sự cố P1 diễn ra như thế nào?",
+        "Approval Matrix để cấp quyền hệ thống là tài liệu nào?",
+        "Nhân viên được làm remote tối đa mấy ngày mỗi tuần?",
+        "ERR-403-AUTH là lỗi gì và cách xử lý?",
+        "Nếu cần hoàn tiền khẩn cấp cho khách hàng VIP, quy trình có khác không?",
         "ERR-403-AUTH là lỗi gì?",  # Query không có trong docs → kiểm tra abstain
     ]
 
