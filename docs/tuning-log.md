@@ -26,6 +26,8 @@ llm_model = "gpt-4o-mini"
 | Answer Relevance | 4 /5 |
 | Context Recall | 4 /5 |
 | Completeness | 4 /5 |
+
+
 Faithfulness (5/5): Tất cả câu trả lời đều bám sát tài liệu, không bịa đặt, luôn có dẫn nguồn.
 Answer Relevance (4/5): Đa số trả lời đúng trọng tâm, nhưng có trường hợp trả lời ngắn hoặc thiếu chi tiết.
 Context Recall (4/5): Truy xuất đúng đoạn liên quan, nhưng đôi khi bỏ sót thông tin phụ.
