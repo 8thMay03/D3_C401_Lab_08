@@ -62,38 +62,58 @@ def score_faithfulness(
 ) -> Dict[str, Any]:
     """
     Faithfulness: Câu trả lời có bám đúng chứng cứ đã retrieve không?
-    Câu hỏi: Model có tự bịa thêm thông tin ngoài retrieved context không?
-
-    Thang điểm 1-5:
-      5: Mọi thông tin trong answer đều có trong retrieved chunks
-      4: Gần như hoàn toàn grounded, 1 chi tiết nhỏ chưa chắc chắn
-      3: Phần lớn grounded, một số thông tin có thể từ model knowledge
-      2: Nhiều thông tin không có trong retrieved chunks
-      1: Câu trả lời không grounded, phần lớn là model bịa
-
-    TODO Sprint 4 — Có 2 cách chấm:
-
-    Cách 1 — Chấm thủ công (Manual, đơn giản):
-        Đọc answer và chunks_used, chấm điểm theo thang trên.
-        Ghi lý do ngắn gọn vào "notes".
-
-    Cách 2 — LLM-as-Judge (Tự động, nâng cao):
-        Gửi prompt cho LLM:
-            "Given these retrieved chunks: {chunks}
-             And this answer: {answer}
-             Rate the faithfulness on a scale of 1-5.
-             5 = completely grounded in the provided context.
-             1 = answer contains information not in the context.
-             Output JSON: {'score': <int>, 'reason': '<string>'}"
-
-    Trả về dict với: score (1-5) và notes (lý do)
+    Sử dụng LLM-as-Judge để chấm điểm tự động.
     """
-    # TODO Sprint 4: Implement scoring
-    # Tạm thời trả về None (yêu cầu chấm thủ công)
-    return {
-        "score": None,
-        "notes": "TODO: Chấm thủ công hoặc implement LLM-as-Judge",
-    }
+    if not chunks_used:
+        return {"score": 1, "notes": "Không có retrieved chunks để đối chiếu."}
+
+    from rag_answer import call_llm
+    import json
+
+    # 1. Chuẩn bị context để LLM đối chiếu
+    context_text = "\n\n".join([f"Chunk {i+1}:\n{c['text']}" for i, c in enumerate(chunks_used)])
+
+    # 2. Xây dựng Judge Prompt
+    prompt = f"""Bạn là một giám khảo nghiêm túc đang chấm điểm bản tin hỗ trợ.
+Nhiệm vụ: Kiểm tra xem CÂU TRẢ LỜI có hoàn toàn dựa trên DANH SÁCH TÀI LIỆU được cung cấp hay không.
+
+DANH SÁCH TÀI LIỆU (Context):
+{context_text}
+
+CÂU TRẢ LỜI CỦA AI (Answer):
+{answer}
+
+Thang điểm 1-5:
+    5: Mọi thông tin trong answer đều có trong retrieved chunks
+    4: Gần như hoàn toàn grounded, 1 chi tiết nhỏ chưa chắc chắn
+    3: Phần lớn grounded, một số thông tin có thể từ model knowledge
+    2: Nhiều thông tin không có trong retrieved chunks
+    1: Câu trả lời không grounded, phần lớn là model bịa
+
+YÊU CẦU ĐỊNH DẠNG: Chỉ trả về duy nhất một JSON object với cấu trúc:
+{{
+  "score": <số nguyên từ 1-5>,
+  "reason": "<lý do ngắn gọn bằng tiếng Việt>"
+}}"""
+
+    try:
+        # 3. Gọi LLM chấm điểm
+        response = call_llm(prompt)
+        # Clean JSON if LLM returns markdown blocks
+        cleaned_json = response.strip().replace("```json", "").replace("```", "").strip()
+        result = json.loads(cleaned_json)
+        
+        return {
+            "score": result.get("score"),
+            "notes": result.get("reason", "No reason provided.")
+        }
+    except Exception as e:
+        print(f"  ⚠️ Lỗi khi chấm Faithfulness: {e}")
+        return {
+            "score": None,
+            "notes": f"Lỗi chấm điểm: {e}"
+        }
+
 
 
 def score_answer_relevance(
@@ -102,21 +122,51 @@ def score_answer_relevance(
 ) -> Dict[str, Any]:
     """
     Answer Relevance: Answer có trả lời đúng câu hỏi người dùng hỏi không?
-    Câu hỏi: Model có bị lạc đề hay trả lời đúng vấn đề cốt lõi không?
-
-    Thang điểm 1-5:
-      5: Answer trả lời trực tiếp và đầy đủ câu hỏi
-      4: Trả lời đúng nhưng thiếu vài chi tiết phụ
-      3: Trả lời có liên quan nhưng chưa đúng trọng tâm
-      2: Trả lời lạc đề một phần
-      1: Không trả lời câu hỏi
-
-    TODO Sprint 4: Implement tương tự score_faithfulness
+    Sử dụng LLM-as-Judge để chấm điểm tự động.
     """
-    return {
-        "score": None,
-        "notes": "TODO: Implement score_answer_relevance",
-    }
+    from rag_answer import call_llm
+    import json
+
+    # 1. Xây dựng Judge Prompt với thang điểm chi tiết từ yêu cầu
+    prompt = f"""Bạn là một giám khảo chuyên nghiệp đánh giá chất lượng chatbot.
+Nhiệm vụ: Kiểm tra xem CÂU TRẢ LỜI có thực sự giải quyết đúng yêu cầu của CÂU HỎI hay không.
+
+CÂU HỎI (Query):
+{query}
+
+CÂU TRẢ LỜI (Answer):
+{answer}
+
+QUY TẮC CHẤM Answer Relevance (Thang điểm 1-5):
+- Điểm 5: Answer trả lời trực tiếp và đầy đủ câu hỏi.
+- Điểm 4: Trả lời đúng nhưng thiếu vài chi tiết phụ.
+- Điểm 3: Trả lời có liên quan nhưng chưa đúng trọng tâm.
+- Điểm 2: Trả lời lạc đề một phần.
+- Điểm 1: Không trả lời câu hỏi.
+
+YÊU CẦU ĐỊNH DẠNG: Chỉ trả về duy nhất một JSON object với cấu trúc:
+{{
+  "score": <số nguyên từ 1-5>,
+  "reason": "<lý do ngắn gọn bằng tiếng Việt>"
+}}"""
+
+    try:
+        # 2. Gọi LLM chấm điểm
+        response = call_llm(prompt)
+        cleaned_json = response.strip().replace("```json", "").replace("```", "").strip()
+        result = json.loads(cleaned_json)
+        
+        return {
+            "score": result.get("score"),
+            "notes": result.get("reason", "No reason provided.")
+        }
+    except Exception as e:
+        print(f"  ⚠️ Lỗi khi chấm Relevance: {e}")
+        return {
+            "score": None,
+            "notes": f"Lỗi chấm điểm: {e}"
+        }
+
 
 
 def score_context_recall(
@@ -143,36 +193,46 @@ def score_context_recall(
     3. Tính recall score
     """
     if not expected_sources:
-        # Câu hỏi không có expected source (ví dụ: "Không đủ dữ liệu" cases)
-        return {"score": None, "recall": None, "notes": "No expected sources"}
+        # Câu hỏi không có expected source (như các trường hợp "không đủ dữ liệu")
+        return {"score": None, "recall": None, "notes": "Không có nguồn dữ liệu kỳ vọng để đối chiếu."}
 
+    # 1. Trích xuất danh sách nguồn từ các chunk đã tìm được
     retrieved_sources = {
         c.get("metadata", {}).get("source", "")
         for c in chunks_used
     }
 
-    # TODO: Kiểm tra matching theo partial path (vì source paths có thể khác format)
+    # 2. Kiểm tra matching (hỗ trợ so khớp một phần tên file)
     found = 0
     missing = []
     for expected in expected_sources:
-        # Kiểm tra partial match (tên file)
-        expected_name = expected.split("/")[-1].replace(".pdf", "").replace(".md", "")
-        matched = any(expected_name.lower() in r.lower() for r in retrieved_sources)
+        # Lấy tên file cơ bản (không bao gồm đường dẫn và phần mở rộng)
+        expected_name = expected.split("/")[-1].split(".")[0].lower()
+        
+        matched = False
+        for retrieved in retrieved_sources:
+            if expected_name in retrieved.lower():
+                matched = True
+                break
+        
         if matched:
             found += 1
         else:
             missing.append(expected)
 
+    # 3. Tính toán recall và chuyển đổi sang thang điểm 1-5
     recall = found / len(expected_sources) if expected_sources else 0
+    score = round(recall * 4) + 1  # 0.0 -> 1, 1.0 -> 5
 
     return {
-        "score": round(recall * 5),  # Convert to 1-5 scale
+        "score": score,
         "recall": recall,
         "found": found,
         "missing": missing,
-        "notes": f"Retrieved: {found}/{len(expected_sources)} expected sources" +
-                 (f". Missing: {missing}" if missing else ""),
+        "notes": f"Tìm thấy {found}/{len(expected_sources)} nguồn kỳ vọng." +
+                 (f" Thiếu: {missing}" if missing else " Đầy đủ bằng chứng.")
     }
+
 
 
 def score_completeness(
@@ -181,27 +241,54 @@ def score_completeness(
     expected_answer: str,
 ) -> Dict[str, Any]:
     """
-    Completeness: Answer có thiếu điều kiện ngoại lệ hoặc bước quan trọng không?
-    Câu hỏi: Answer có bao phủ đủ thông tin so với expected_answer không?
-
-    Thang điểm 1-5:
-      5: Answer bao gồm đủ tất cả điểm quan trọng trong expected_answer
-      4: Thiếu 1 chi tiết nhỏ
-      3: Thiếu một số thông tin quan trọng
-      2: Thiếu nhiều thông tin quan trọng
-      1: Thiếu phần lớn nội dung cốt lõi
-
-    TODO Sprint 4:
-    Option 1 — Chấm thủ công: So sánh answer vs expected_answer và chấm.
-    Option 2 — LLM-as-Judge:
-        "Compare the model answer with the expected answer.
-         Rate completeness 1-5. Are all key points covered?
-         Output: {'score': int, 'missing_points': [str]}"
+    Completeness: Answer có bao phủ đủ thông tin so với expected_answer không?
+    Sử dụng LLM-as-Judge để chấm điểm tự động.
     """
-    return {
-        "score": None,
-        "notes": "TODO: Implement score_completeness (so sánh với expected_answer)",
-    }
+    from rag_answer import call_llm
+    import json
+
+    # 1. Xây dựng Judge Prompt với thang điểm chi tiết
+    prompt = f"""Bạn là một giám khảo chuyên nghiệp đánh giá độ đầy đủ của thông tin chatbot.
+Nhiệm vụ: So sánh CÂU TRẢ LỜI CỦA AI với CÂU TRẢ LỜI MẪU (Expected Answer) để đánh giá xem AI đã trả lời đủ ý chưa.
+
+CÂU HỎI (Query): {query}
+
+CÂU TRẢ LỜI MẪU (Expected Answer):
+{expected_answer}
+
+CÂU TRẢ LỜI CỦA AI (Answer):
+{answer}
+
+QUY TẮC CHẤM Completeness (Thang điểm 1-5):
+- Điểm 5: Answer bao gồm đủ tất cả điểm quan trọng trong expected_answer
+- Điểm 4: Thiếu 1 chi tiết nhỏ
+- Điểm 3: Thiếu một số thông tin quan trọng
+- Điểm 2: Thiếu nhiều thông tin quan trọng
+- Điểm 1: Thiếu phần lớn nội dung cốt lõi
+
+YÊU CẦU ĐỊNH DẠNG: Chỉ trả về duy nhất một JSON object với cấu trúc:
+{{
+  "score": <số nguyên từ 1-5>,
+  "reason": "<lý do ngắn gọn bằng tiếng Việt>"
+}}"""
+
+    try:
+        # 2. Gọi LLM chấm điểm
+        response = call_llm(prompt)
+        cleaned_json = response.strip().replace("```json", "").replace("```", "").strip()
+        result = json.loads(cleaned_json)
+        
+        return {
+            "score": result.get("score"),
+            "notes": result.get("reason", "No reason provided.")
+        }
+    except Exception as e:
+        print(f"  ⚠️ Lỗi khi chấm Completeness: {e}")
+        return {
+            "score": None,
+            "notes": f"Lỗi chấm điểm: {e}"
+        }
+
 
 
 # =============================================================================
@@ -488,23 +575,23 @@ if __name__ == "__main__":
 
     # --- Chạy Variant (sau khi Sprint 3 hoàn thành) ---
     # TODO Sprint 4: Uncomment sau khi implement variant trong rag_answer.py
-    # print("\n--- Chạy Variant ---")
-    # variant_results = run_scorecard(
-    #     config=VARIANT_CONFIG,
-    #     test_questions=test_questions,
-    #     verbose=True,
-    # )
-    # variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
-    # (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+    print("\n--- Chạy Variant ---")
+    variant_results = run_scorecard(
+        config=VARIANT_CONFIG,
+        test_questions=test_questions,
+        verbose=True,
+    )
+    variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
+    (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
 
     # --- A/B Comparison ---
     # TODO Sprint 4: Uncomment sau khi có cả baseline và variant
-    # if baseline_results and variant_results:
-    #     compare_ab(
-    #         baseline_results,
-    #         variant_results,
-    #         output_csv="ab_comparison.csv"
-    #     )
+    if baseline_results and variant_results:
+        compare_ab(
+            baseline_results,
+            variant_results,
+            output_csv="ab_comparison.csv"
+        )
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Hoàn thành Sprint 2 + 3 trước")
